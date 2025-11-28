@@ -1,0 +1,563 @@
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Calendar, MapPin, ArrowRight, CheckCircle, X } from "lucide-react";
+import { toast } from "sonner";
+import { getCategoryLabel } from "@/lib/translations";
+
+interface Match {
+  id: string;
+  lost_item_id: string;
+  found_item_id: string;
+  match_score: number;
+  status: string;
+  created_at: string;
+  lost_item: {
+    id: string;
+    title: string;
+    description: string;
+    category: string;
+    location: string;
+    date_lost_or_found: string;
+    image_url?: string;
+    user_id: string;
+  };
+  found_item: {
+    id: string;
+    title: string;
+    description: string;
+    category: string;
+    location: string;
+    date_lost_or_found: string;
+    image_url?: string;
+    user_id: string;
+  };
+}
+
+export default function Matches() {
+  const navigate = useNavigate();
+  const { user, loading } = useAuth();
+  const [matches, setMatches] = useState<Match[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isFindingMatches, setIsFindingMatches] = useState(false);
+
+  useEffect(() => {
+    if (!loading && !user) {
+      navigate("/auth");
+    }
+  }, [user, loading, navigate]);
+
+  useEffect(() => {
+    if (user) {
+      fetchMatches();
+    }
+  }, [user]);
+
+  const fetchMatches = async () => {
+    try {
+      setIsLoading(true);
+      
+      if (!user?.id) {
+        setMatches([]);
+        return;
+      }
+
+      // Buscar todos os itens do usuário (perdidos e encontrados)
+      const { data: userItems, error: itemsError } = await supabase
+        .from("items")
+        .select("id")
+        .eq("user_id", user.id);
+
+      if (itemsError) throw itemsError;
+
+      const userItemIds = userItems?.map(item => item.id) || [];
+
+      if (userItemIds.length === 0) {
+        setMatches([]);
+        return;
+      }
+
+      // Buscar matches onde o usuário é dono do item perdido OU encontrado
+      const { data: matchesData, error: matchesError } = await supabase
+        .from("matches")
+        .select("*")
+        .or(`lost_item_id.in.(${userItemIds.join(",")}),found_item_id.in.(${userItemIds.join(",")})`)
+        .order("match_score", { ascending: false });
+
+      if (matchesError) throw matchesError;
+
+      // Buscar detalhes dos itens perdidos e encontrados
+      const lostItemIds = matchesData?.map(m => m.lost_item_id) || [];
+      const foundItemIds = matchesData?.map(m => m.found_item_id) || [];
+      const allItemIds = [...new Set([...lostItemIds, ...foundItemIds])];
+
+      if (allItemIds.length === 0) {
+        setMatches([]);
+        return;
+      }
+
+      const { data: itemsData, error: itemsDataError } = await supabase
+        .from("items")
+        .select("*")
+        .in("id", allItemIds);
+
+      if (itemsDataError) throw itemsDataError;
+
+      // Mapear itens por ID
+      const itemsMap = new Map(itemsData?.map(item => [item.id, item]));
+
+      // Construir matches completos
+      const completeMatches = matchesData?.map(match => ({
+        ...match,
+        lost_item: itemsMap.get(match.lost_item_id),
+        found_item: itemsMap.get(match.found_item_id)
+      })).filter(m => m.lost_item && m.found_item) || [];
+
+      setMatches(completeMatches as Match[]);
+    } catch (error: any) {
+      console.error("Erro ao carregar correspondências:", error);
+      toast.error("Erro ao carregar correspondências: " + error.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const findNewMatches = async () => {
+    try {
+      setIsFindingMatches(true);
+      const { data, error } = await supabase.functions.invoke("find-matches");
+
+      if (error) throw error;
+
+      toast.success(`Busca concluída! ${data.matchesFound} novas correspondências encontradas.`);
+      fetchMatches();
+    } catch (error: any) {
+      toast.error("Erro ao buscar correspondências: " + error.message);
+    } finally {
+      setIsFindingMatches(false);
+    }
+  };
+
+  const acceptMatch = async (matchId: string, lostItemId: string, foundItemId: string) => {
+    try {
+      // Verificar se o usuário é dono de um dos itens
+      const { data: lostItem } = await supabase
+        .from("items")
+        .select("user_id")
+        .eq("id", lostItemId)
+        .single();
+
+      const { data: foundItem } = await supabase
+        .from("items")
+        .select("user_id")
+        .eq("id", foundItemId)
+        .single();
+
+      if (!lostItem || !foundItem) {
+        throw new Error("Itens não encontrados");
+      }
+
+      if (lostItem.user_id !== user?.id && foundItem.user_id !== user?.id) {
+        throw new Error("Você não tem permissão para aceitar esta correspondência");
+      }
+
+      // Atualizar status do match
+      const { error: matchError } = await supabase
+        .from("matches")
+        .update({ status: "accepted" })
+        .eq("id", matchId);
+
+      if (matchError) throw matchError;
+
+      // Atualizar status dos itens para "matched"
+      const { error: lostError } = await supabase
+        .from("items")
+        .update({ status: "matched" })
+        .eq("id", lostItemId);
+
+      if (lostError) throw lostError;
+
+      const { error: foundError } = await supabase
+        .from("items")
+        .update({ status: "matched" })
+        .eq("id", foundItemId);
+
+      if (foundError) throw foundError;
+
+      toast.success("Correspondência aceita! Agora vocês podem entrar em contato para organizar a devolução.");
+      fetchMatches();
+    } catch (error: any) {
+      console.error("Erro ao aceitar correspondência:", error);
+      toast.error("Erro ao aceitar correspondência: " + error.message);
+    }
+  };
+
+  const markAsClaimed = async (matchId: string, lostItemId: string, foundItemId: string) => {
+    try {
+      // Atualizar status do match
+      const { error: matchError } = await supabase
+        .from("matches")
+        .update({ status: "claimed" })
+        .eq("id", matchId);
+
+      if (matchError) throw matchError;
+
+      // Atualizar status dos itens para "claimed"
+      const { error: lostError } = await supabase
+        .from("items")
+        .update({ status: "claimed" })
+        .eq("id", lostItemId);
+
+      if (lostError) throw lostError;
+
+      const { error: foundError } = await supabase
+        .from("items")
+        .update({ status: "claimed" })
+        .eq("id", foundItemId);
+
+      if (foundError) throw foundError;
+
+      toast.success("Item marcado como reclamado! Aguardando devolução.");
+      fetchMatches();
+    } catch (error: any) {
+      console.error("Erro ao marcar como reclamado:", error);
+      toast.error("Erro ao marcar como reclamado: " + error.message);
+    }
+  };
+
+  const markAsReturned = async (matchId: string, lostItemId: string, foundItemId: string) => {
+    try {
+      // Atualizar status do match
+      const { error: matchError } = await supabase
+        .from("matches")
+        .update({ status: "returned" })
+        .eq("id", matchId);
+
+      if (matchError) throw matchError;
+
+      // Atualizar status dos itens para "returned"
+      const { error: lostError } = await supabase
+        .from("items")
+        .update({ status: "returned" })
+        .eq("id", lostItemId);
+
+      if (lostError) throw lostError;
+
+      const { error: foundError } = await supabase
+        .from("items")
+        .update({ status: "returned" })
+        .eq("id", foundItemId);
+
+      if (foundError) throw foundError;
+
+      toast.success("Item marcado como devolvido! Processo concluído com sucesso.");
+      fetchMatches();
+    } catch (error: any) {
+      console.error("Erro ao marcar como devolvido:", error);
+      toast.error("Erro ao marcar como devolvido: " + error.message);
+    }
+  };
+
+  const rejectMatch = async (matchId: string) => {
+    try {
+      // Atualizar status do match para rejected
+      // O trigger no banco de dados automaticamente exclui o item encontrado
+      const { error: matchError } = await supabase
+        .from("matches")
+        .update({ status: "rejected" })
+        .eq("id", matchId);
+
+      if (matchError) throw matchError;
+
+      toast.success("Correspondência rejeitada e item encontrado excluído.");
+      fetchMatches();
+    } catch (error: any) {
+      toast.error("Erro ao rejeitar correspondência: " + error.message);
+    }
+  };
+
+  const unrejectMatch = async (matchId: string) => {
+    try {
+      // Atualizar status do match de volta para pending
+      const { error: matchError } = await supabase
+        .from("matches")
+        .update({ status: "pending" })
+        .eq("id", matchId);
+
+      if (matchError) throw matchError;
+
+      toast.success("Rejeição revertida. A correspondência voltou ao status pendente.");
+      fetchMatches();
+    } catch (error: any) {
+      toast.error("Erro ao reverter rejeição: " + error.message);
+    }
+  };
+
+  const getMatchScoreColor = (score: number) => {
+    if (score >= 80) return "bg-green-500";
+    if (score >= 60) return "bg-blue-500";
+    return "bg-amber-500";
+  };
+
+  const getStatusBadge = (status: string) => {
+    const statusMap: Record<string, { label: string; variant: any }> = {
+      pending: { label: "Pendente", variant: "outline" },
+      accepted: { label: "Aceito", variant: "default" },
+      claimed: { label: "Reclamado", variant: "secondary" },
+      returned: { label: "Devolvido", variant: "default" },
+      rejected: { label: "Rejeitado", variant: "destructive" }
+    };
+    
+    const config = statusMap[status] || statusMap.pending;
+    return <Badge variant={config.variant}>{config.label}</Badge>;
+  };
+
+  if (loading || isLoading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <p className="text-foreground">Carregando...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-background">
+      <div className="container mx-auto px-4 py-8">
+        <div className="mb-8 flex justify-between items-start">
+          <div>
+            <Button variant="outline" onClick={() => navigate("/dashboard")} className="mb-4">
+              Voltar ao Dashboard
+            </Button>
+            <h1 className="text-4xl font-bold text-foreground mb-2">Correspondências</h1>
+            <p className="text-muted-foreground">
+              Possíveis matches entre itens perdidos e encontrados
+            </p>
+          </div>
+          <Button onClick={findNewMatches} disabled={isFindingMatches}>
+            {isFindingMatches ? "Buscando..." : "Buscar Novas Correspondências"}
+          </Button>
+        </div>
+
+        <div className="space-y-6">
+          {matches.length === 0 ? (
+            <Card>
+              <CardContent className="py-12 text-center">
+                <p className="text-muted-foreground">
+                  Nenhuma correspondência encontrada ainda.
+                  <br />
+                  Clique em "Buscar Novas Correspondências" para encontrar matches.
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            matches.map((match) => (
+              <Card 
+                key={match.id} 
+                className={`overflow-hidden transition-opacity ${
+                  match.status === "rejected" ? "opacity-50" : "opacity-100"
+                }`}
+              >
+                <CardHeader className="bg-muted/50">
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-3">
+                      <Badge className={getMatchScoreColor(match.match_score)}>
+                        {match.match_score}% match
+                      </Badge>
+                      {getStatusBadge(match.status)}
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      {new Date(match.created_at).toLocaleDateString("pt-BR")}
+                    </p>
+                  </div>
+                </CardHeader>
+                <CardContent className="pt-6">
+                  <div className="grid md:grid-cols-[1fr,auto,1fr] gap-6 items-start">
+                    {/* Item Perdido */}
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-2 mb-3">
+                        <Badge variant="outline" className="bg-amber-500/10">
+                          Item Perdido
+                        </Badge>
+                      </div>
+                      {match.lost_item.image_url && (
+                        <img
+                          src={match.lost_item.image_url}
+                          alt={match.lost_item.title}
+                          className="w-full h-48 object-cover rounded-lg"
+                        />
+                      )}
+                      <div>
+                        <h3 className="text-xl font-semibold mb-2">
+                          {match.lost_item.title}
+                        </h3>
+                        <p className="text-muted-foreground text-sm mb-3">
+                          {match.lost_item.description}
+                        </p>
+                        <div className="space-y-2 text-sm">
+                          <div className="flex items-center gap-2">
+                            <Badge variant="secondary">{getCategoryLabel(match.lost_item.category)}</Badge>
+                          </div>
+                          <div className="flex items-center gap-2 text-muted-foreground">
+                            <MapPin className="h-4 w-4" />
+                            <span>{match.lost_item.location}</span>
+                          </div>
+                          <div className="flex items-center gap-2 text-muted-foreground">
+                            <Calendar className="h-4 w-4" />
+                            <span>
+                              {new Date(match.lost_item.date_lost_or_found).toLocaleDateString("pt-BR")}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Seta de conexão */}
+                    <div className="hidden md:flex items-center justify-center pt-12">
+                      <div className="bg-primary/10 rounded-full p-4">
+                        <ArrowRight className="h-6 w-6 text-primary" />
+                      </div>
+                    </div>
+
+                    {/* Item Encontrado */}
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-2 mb-3">
+                        <Badge variant="outline" className="bg-green-500/10">
+                          Item Encontrado
+                        </Badge>
+                      </div>
+                      {match.found_item.image_url && (
+                        <img
+                          src={match.found_item.image_url}
+                          alt={match.found_item.title}
+                          className="w-full h-48 object-cover rounded-lg"
+                        />
+                      )}
+                      <div>
+                        <h3 className="text-xl font-semibold mb-2">
+                          {match.found_item.title}
+                        </h3>
+                        <p className="text-muted-foreground text-sm mb-3">
+                          {match.found_item.description}
+                        </p>
+                        <div className="space-y-2 text-sm">
+                          <div className="flex items-center gap-2">
+                            <Badge variant="secondary">{getCategoryLabel(match.found_item.category)}</Badge>
+                          </div>
+                          <div className="flex items-center gap-2 text-muted-foreground">
+                            <MapPin className="h-4 w-4" />
+                            <span>{match.found_item.location}</span>
+                          </div>
+                          <div className="flex items-center gap-2 text-muted-foreground">
+                            <Calendar className="h-4 w-4" />
+                            <span>
+                              {new Date(match.found_item.date_lost_or_found).toLocaleDateString("pt-BR")}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Ações */}
+                  <div className="mt-6 pt-6 border-t flex gap-3 flex-wrap">
+                    {match.status === "pending" && (
+                      <>
+                        <Button
+                          onClick={() =>
+                            acceptMatch(match.id, match.lost_item_id, match.found_item_id)
+                          }
+                          className="flex items-center gap-2"
+                        >
+                          <CheckCircle className="h-4 w-4" />
+                          Aceitar Correspondência
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => rejectMatch(match.id)}
+                          className="flex items-center gap-2"
+                        >
+                          <X className="h-4 w-4" />
+                          Rejeitar
+                        </Button>
+                      </>
+                    )}
+                    {match.status === "accepted" && match.lost_item.user_id === user?.id && (
+                      <>
+                        <Button
+                          onClick={() =>
+                            markAsClaimed(match.id, match.lost_item_id, match.found_item_id)
+                          }
+                        >
+                          Confirmar que Recuperei o Item
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => rejectMatch(match.id)}
+                          className="flex items-center gap-2"
+                        >
+                          <X className="h-4 w-4" />
+                          Não é o mesmo item
+                        </Button>
+                      </>
+                    )}
+                    {match.status === "claimed" && match.found_item.user_id === user?.id && (
+                      <>
+                        <Button
+                          onClick={() =>
+                            markAsReturned(match.id, match.lost_item_id, match.found_item_id)
+                          }
+                        >
+                          Confirmar Devolução
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => rejectMatch(match.id)}
+                          className="flex items-center gap-2"
+                        >
+                          <X className="h-4 w-4" />
+                          Não é o mesmo item
+                        </Button>
+                      </>
+                    )}
+                    {match.status === "returned" && (
+                      <Badge variant="default" className="px-4 py-2">
+                        Processo Concluído ✓
+                      </Badge>
+                    )}
+                    {match.status === "rejected" && (
+                      <>
+                        <Badge variant="destructive" className="px-4 py-2">
+                          Correspondência Rejeitada
+                        </Badge>
+                        <Button
+                          variant="outline"
+                          onClick={() => unrejectMatch(match.id)}
+                          className="flex items-center gap-2"
+                        >
+                          <CheckCircle className="h-4 w-4" />
+                          É este item sim
+                        </Button>
+                      </>
+                    )}
+                    {(match.status === "accepted" || match.status === "claimed") && (
+                      <div className="w-full mt-2">
+                        <p className="text-sm text-muted-foreground">
+                          {match.status === "accepted" && "Entre em contato para organizar a devolução."}
+                          {match.status === "claimed" && "Aguardando confirmação da devolução."}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
