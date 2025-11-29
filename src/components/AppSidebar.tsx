@@ -1,4 +1,5 @@
-import { Home, Search, Package, Plus, FileCheck, LogOut } from "lucide-react";
+import { useState } from "react";
+import { Home, Search, Package, Plus, FileCheck, LogOut, Loader2 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
@@ -30,13 +31,20 @@ const registerItems = [
 export function AppSidebar() {
   const { state } = useSidebar();
   const { user, signOut } = useAuth();
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   const handleLogout = async () => {
+    if (isLoggingOut) return;
+    setIsLoggingOut(true);
+    const toastId = toast.loading("Encerrando sessão...");
     try {
       await signOut();
       toast.success("Logout realizado com sucesso");
     } catch (error) {
       toast.error("Erro ao fazer logout");
+    } finally {
+      toast.dismiss(toastId);
+      setIsLoggingOut(false);
     }
   };
 
@@ -102,10 +110,15 @@ export function AppSidebar() {
               <SidebarMenuItem>
                 <SidebarMenuButton 
                   onClick={handleLogout} 
-                  className="hover:bg-destructive/10 hover:text-destructive transition-all duration-300 rounded-lg"
+                  className={`hover:bg-destructive/10 hover:text-destructive transition-all duration-300 rounded-lg ${isLoggingOut ? "opacity-60 pointer-events-none" : ""}`}
+                  aria-busy={isLoggingOut}
                 >
-                  <LogOut className="h-4 w-4" />
-                  {!isCollapsed && <span>Sair</span>}
+                  {isLoggingOut ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <LogOut className="h-4 w-4" />
+                  )}
+                  {!isCollapsed && <span>{isLoggingOut ? "Saindo..." : "Sair"}</span>}
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
