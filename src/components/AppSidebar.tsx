@@ -45,10 +45,12 @@ export function AppSidebar() {
   const isCollapsed = state === "collapsed";
 
   return (
-    <Sidebar className={isCollapsed ? "w-14" : "w-64"} collapsible="icon">
+    <Sidebar className={isCollapsed ? "w-14" : "w-64 border-r border-border/50 bg-card"} collapsible="icon">
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Menu Principal</SidebarGroupLabel>
+          <SidebarGroupLabel className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+            Menu Principal
+          </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {mainItems.map((item) => (
@@ -57,8 +59,8 @@ export function AppSidebar() {
                     <NavLink
                       to={item.url}
                       end
-                      className="hover:bg-primary hover:text-primary-foreground transition-colors"
-                      activeClassName="bg-muted text-primary font-medium"
+                      className="hover:bg-primary/10 hover:text-primary transition-all duration-300 rounded-lg"
+                      activeClassName="bg-primary/10 text-primary font-semibold shadow-sm"
                     >
                       <item.icon className="h-4 w-4" />
                       {!isCollapsed && <span>{item.title}</span>}
@@ -71,7 +73,9 @@ export function AppSidebar() {
         </SidebarGroup>
 
         <SidebarGroup>
-          <SidebarGroupLabel>Registrar</SidebarGroupLabel>
+          <SidebarGroupLabel className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+            Registrar
+          </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {registerItems.map((item) => (
@@ -79,8 +83,8 @@ export function AppSidebar() {
                   <SidebarMenuButton asChild>
                     <NavLink
                       to={item.url}
-                      className="hover:bg-primary hover:text-primary-foreground transition-colors"
-                      activeClassName="bg-muted text-primary font-medium"
+                      className="hover:bg-primary/10 hover:text-primary transition-all duration-300 rounded-lg"
+                      activeClassName="bg-primary/10 text-primary font-semibold shadow-sm"
                     >
                       <item.icon className="h-4 w-4" />
                       {!isCollapsed && <span>{item.title}</span>}
@@ -92,11 +96,14 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        <SidebarGroup>
+        <SidebarGroup className="mt-auto">
           <SidebarGroupContent>
             <SidebarMenu>
               <SidebarMenuItem>
-                <SidebarMenuButton onClick={handleLogout} className="hover:bg-destructive/10 hover:text-destructive">
+                <SidebarMenuButton 
+                  onClick={handleLogout} 
+                  className="hover:bg-destructive/10 hover:text-destructive transition-all duration-300 rounded-lg"
+                >
                   <LogOut className="h-4 w-4" />
                   {!isCollapsed && <span>Sair</span>}
                 </SidebarMenuButton>

@@ -28,8 +28,8 @@ const AppContent = () => {
         <div className="min-h-screen flex w-full">
           <AppSidebar />
           <main className="flex-1 flex flex-col">
-            <header className="h-14 border-b flex items-center px-4">
-              <SidebarTrigger />
+            <header className="h-14 border-b border-border/50 bg-card flex items-center px-4 sticky top-0 z-30">
+              <SidebarTrigger className="hover:bg-primary/10 transition-colors" />
             </header>
             <div className="flex-1">
               <Routes>
